@@ -15,7 +15,7 @@ from app.schemas.cat import (
     CatCreate, 
     CatUpdate, 
     CatResponse, 
-    AnalysisResultSchema
+    
 )
 
 router = APIRouter()

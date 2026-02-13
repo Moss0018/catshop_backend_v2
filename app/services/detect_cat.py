@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class CatDetector:
-    """
+    """D
     🐱 Cat Detector using YOLOv8
     
     Features:
