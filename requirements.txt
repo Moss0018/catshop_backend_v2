@@ -1,8 +1,9 @@
+
+
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 
 python-dotenv==1.0.0
-
 firebase-admin==6.3.0
 cloudinary==1.32.0
 
@@ -15,9 +16,6 @@ opencv-python-headless
 
 numpy==1.26.4
 ultralytics==8.1.0
-
-torch==2.1.2
-torchvision==0.16.2
 
 sqlalchemy>=2.0
 asyncpg>=0.29.0,<0.31
