@@ -1,13 +1,41 @@
 """Cat Detect Service - Optimized for FastAPI + Flutter"""
-from ultralytics import YOLO
+
 import cv2
 import numpy as np
 from typing import Dict, Optional
 from pathlib import Path
 
+# 🔥 CRITICAL FIX for PyTorch 2.10+ compatibility with YOLO
+import torch
+
+# Save original torch.load
+_original_torch_load = torch.load
+
+def _patched_torch_load(f, map_location=None, pickle_module=None, *, weights_only=None, **kwargs):
+    """
+    Patched torch.load that forces weights_only=False for .pt files
+    This is safe for official YOLO models from Ultralytics
+    """
+    # Force weights_only=False for .pt model files
+    if weights_only is None or weights_only is True:
+        if isinstance(f, str) and f.endswith('.pt'):
+            weights_only = False
+            print(f"🔧 Patching torch.load: forcing weights_only=False for {f}")
+    
+    return _original_torch_load(f, map_location=map_location, 
+                                pickle_module=pickle_module, 
+                                weights_only=weights_only, **kwargs)
+
+# Apply global patch
+torch.load = _patched_torch_load
+print("✅ Applied PyTorch 2.10+ compatibility patch for YOLO models")
+
+# Now import YOLO after patching
+from ultralytics import YOLO
+
 
 class CatDetector:
-    """D
+    """
     🐱 Cat Detector using YOLOv8
     
     Features:
@@ -53,7 +81,7 @@ class CatDetector:
             {
                 "is_valid": bool,
                 "reason": str or None,
-                "details": dict  # 🔥 เพิ่มรายละเอียด
+                "details": dict
             }
         """
         h, w = image.shape[:2]
@@ -237,7 +265,7 @@ class CatDetector:
             
             result = {
                 "is_cat": True,
-                "confidence": round(best_cat["confidence"], 4),  # 🔥 4 ตำแหน่งทศนิยม
+                "confidence": round(best_cat["confidence"], 4),
                 "bounding_box": best_cat["bbox"],
                 "total_cats_detected": len(cats),
                 "image_quality": quality,
