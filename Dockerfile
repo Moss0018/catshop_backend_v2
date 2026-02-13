@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# --- system deps ---
+# --- system deps (opencv / yolo ต้องใช้) ---
 RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
@@ -14,12 +14,14 @@ COPY requirements.txt .
 
 RUN pip install --upgrade pip
 
-# 🔒 LOCK torch (SAFE ZONE)
+# 🔒 Torch CPU (YOLO-compatible, stable)
 RUN pip install --no-cache-dir \
-    torch==2.1.2+cpu \
-    torchvision==0.16.2+cpu \
+    torch==2.2.2+cpu \
+    torchvision==0.17.2+cpu \
+    torchaudio==2.2.2+cpu \
     --index-url https://download.pytorch.org/whl/cpu
 
+# --- rest of deps ---
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- app ---
