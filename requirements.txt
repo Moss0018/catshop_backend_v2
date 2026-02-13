@@ -1,28 +1,23 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 
-# Database
-asyncpg>=0.29.0,<0.31
-sqlalchemy>=2.0
-
-# Env
 python-dotenv==1.0.0
 
-# Auth / External services
 firebase-admin==6.3.0
 cloudinary==1.32.0
-PyJWT>=2.8,<3.0
 
-# Pydantic (FastAPI v0.104 ใช้ชุดนี้นิ่ง)
 pydantic>=2.4,<3.0
 pydantic-settings>=2.0,<3.0
+PyJWT>=2.8,<3.0
 
-# Image / ML
-numpy==1.26.4
 Pillow>=10.0.0
 opencv-python-headless
 
-# YOLO / Torch (PIN แล้ว ไม่พัง)
+numpy==1.26.4
+ultralytics==8.1.0
+
 torch==2.1.2
 torchvision==0.16.2
-ultralytics==8.1.0
+
+sqlalchemy>=2.0
+asyncpg>=0.29.0,<0.31
