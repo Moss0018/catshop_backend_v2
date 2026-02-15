@@ -30,17 +30,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️ Firebase skipped: {e}")
 
-    # --- YOLO Cat Detector --- 🔥 เพิ่มส่วนนี้
-    try:
-        print("🐱 Initializing YOLO Cat Detector...")
-        detector = get_detector()
-        print(f"🐱---{detector}")
-        print("✅ YOLO Cat Detector ready")
-    except Exception as e:
-        print(f"❌ Failed to initialize YOLO: {e}")
-        import traceback
-        traceback.print_exc()
-        # ไม่ raise error เพื่อให้ server ยังรันได้
+   
 
     print("🚀 App startup complete")
     yield
