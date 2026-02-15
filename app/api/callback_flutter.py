@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
-from typing import List
-import asyncpg
-from app.auth.dependencies import verify_firebase_token
+from fastapi import APIRouter, HTTPException
 
-from app.utils.cloudinary_helper import upload_image_to_cloudinary
-from app.utils.response import success_response, error_response
+import asyncpg
+
+
+
+
 from app.db.database import get_db_pool
-from app.models.cat_clothing import ClothingResponse
+
 
 from fastapi import APIRouter
 
