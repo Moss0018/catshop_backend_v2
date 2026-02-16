@@ -56,43 +56,64 @@ class PaginatedResponse(BaseModel):
 
 @router.get("/search/autocomplete")
 async def search_autocomplete(
-    query: str = Query(..., min_length=1, description="Search query (minimum 1 characters)")
+    query: Optional[str] = Query(None, description="Search query (optional, shows all if empty)")
 ):
     """
     Autocomplete search suggestions from search_category table
     Returns matching categories based on name_en or name_th
+    If no query provided, returns all categories
     """
     try:
         pool = await get_db_pool()
         async with pool.acquire() as connection:
-            sql = """
-            SELECT 
-                id,
-                name_category,
-                category_type
+            # ถ้าไม่มี query หรือ query ว่าง ให้แสดงทั้งหมด
+            if not query or query.strip() == "":
+                sql = """
+                SELECT 
+                    id,
+                    name_category,
+                    category_type
                 FROM search_category
-            WHERE 
-            LOWER(name_category) LIKE LOWER($1)
-            ORDER BY 
-            CASE
-                WHEN category_type = 'all' THEN 0
-                WHEN category_type = 'season' THEN 1
-                WHEN category_type = 'festival' THEN 2
-                WHEN category_type = 'style' THEN 3
-            ELSE 4
-            END,
-                name_category
+                ORDER BY 
+                CASE
+                    WHEN category_type = 'all' THEN 0
+                    WHEN category_type = 'season' THEN 1
+                    WHEN category_type = 'festival' THEN 2
+                    WHEN category_type = 'style' THEN 3
+                ELSE 4
+                END,
+                    name_category
                 LIMIT 10;
-            """
-            
-            search_pattern = f"%{query}%"
-            rows = await connection.fetch(sql, search_pattern)
+                """
+                rows = await connection.fetch(sql)
+            else:
+                # ถ้ามี query ให้ค้นหาตามปกติ
+                sql = """
+                SELECT 
+                    id,
+                    name_category,
+                    category_type
+                FROM search_category
+                WHERE 
+                    LOWER(name_category) LIKE LOWER($1)
+                ORDER BY 
+                CASE
+                    WHEN category_type = 'all' THEN 0
+                    WHEN category_type = 'season' THEN 1
+                    WHEN category_type = 'festival' THEN 2
+                    WHEN category_type = 'style' THEN 3
+                ELSE 4
+                END,
+                    name_category
+                LIMIT 10;
+                """
+                search_pattern = f"%{query}%"
+                rows = await connection.fetch(sql, search_pattern)
             
             return [dict(row) for row in rows]
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-
 
 @router.get("/search/btn/outfit/{category_id}")
 async def search_btn_outfit(

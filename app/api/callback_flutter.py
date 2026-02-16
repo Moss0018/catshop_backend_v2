@@ -26,6 +26,7 @@ async def get_home_advertiment():
             query = """
     SELECT 
         id,
+        uuid,
         image_url,
         images,
         clothing_name,
@@ -82,6 +83,7 @@ async def get_home_advertiment_detail(item_id: int):
             query = """
                   SELECT 
         id,
+        uuid,
         image_url,
         images,
         clothing_name,
@@ -136,6 +138,7 @@ async def get_clothing_shop_like():
             query = """
                	    SELECT 
                     id,
+                    uuid,
                     image_url,
                     images,
                     clothing_name,
@@ -193,6 +196,7 @@ async def get_clothing_shop_seller():
             query = """
                 SELECT 
                     id,
+                    uuid,
                     image_url,
                     images,
                     clothing_name,
@@ -246,6 +250,7 @@ async def get_notifications_messages():
             query = """ 
             SELECT
                 id,
+                uuid,
                 image_url,
                 images,
                 clothing_name,
@@ -294,8 +299,9 @@ async def get_notifications_messages_detail(item_id: int):
 
         async with pool.acquire() as connection:
             query = """
- SELECT
-              id,
+            SELECT
+                id,
+                uuid,
                 image_url,
                 images,
                 clothing_name,
@@ -347,6 +353,7 @@ async def get_notifications_news():
             query = """ 
              SELECT
                 id,
+                uuid,
                 image_url,
                 images,
                 clothing_name,
@@ -393,6 +400,7 @@ async def get_notifications_news_detail(item_id: int):
             query = """
                 SELECT
                     id,
+                    uuid,
                     image_url,
                     images,
                     clothing_name,
