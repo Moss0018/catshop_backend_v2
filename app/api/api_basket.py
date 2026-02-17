@@ -9,36 +9,26 @@ from app.db.database import get_db_pool
 router = APIRouter()
 
 # ============================================================================
-# Pydantic Models
+# Pydantic Models (ใช้ firebase_uid แทน user_id)
 # ============================================================================
 
 class BasketItem(BaseModel):
-    user_id: int  # person_login_catshop.id
-    clothing_uuid: str  # UUID as string
+    firebase_uid: str 
+    clothing_uuid: str
     quantity: int = 1
 
 class UpdateQuantity(BaseModel):
-    user_id: int
+    firebase_uid: str  
     clothing_uuid: str
     quantity: int
 
-class PaginationRequest(BaseModel):
-    user_id: int
-    page: int = 1
-    limit: int = 10
-
 # ============================================================================
-# GET: ดึงรายการตะกร้าทั้งหมดของ User
+# GET: ดึงตะกร้าสินค้าทั้งหมด
 # ============================================================================
 
-@router.get("/get/person-baskets/{user_id}")
-async def get_person_baskets(user_id: int):
-    """
-    Get shopping basket for a specific user
-    
-    Returns:
-    - List of basket items with full product details and quantity
-    """
+@router.get("/get/person-baskets/{firebase_uid}")
+async def get_person_baskets(firebase_uid: str):
+    """Get shopping basket for a specific user by firebase_uid"""
     try:
         pool = await get_db_pool()
         
@@ -46,7 +36,7 @@ async def get_person_baskets(user_id: int):
             query = """
                 SELECT 
                     ub.id as basket_id,
-                    ub.user_id,
+                    ub.firebase_uid,
                     ub.clothing_uuid,
                     ub.quantity,
                     ub.created_at,
@@ -63,17 +53,16 @@ async def get_person_baskets(user_id: int):
                     c.breed,
                     c.description,
                     c.images,
-                    -- คำนวณราคารวม
                     CASE 
                         WHEN c.discount_price > 0 THEN c.discount_price * ub.quantity
                         ELSE c.price * ub.quantity
                     END as total_price
                 FROM user_baskets ub
                 INNER JOIN cat_clothing c ON ub.clothing_uuid = c.uuid
-                WHERE ub.user_id = $1
+                WHERE ub.firebase_uid = $1
                 ORDER BY ub.created_at DESC
             """
-            rows = await connection.fetch(query, user_id)
+            rows = await connection.fetch(query, firebase_uid)
             
             if not rows:
                 return {
@@ -88,14 +77,12 @@ async def get_person_baskets(user_id: int):
             items = []
             for row in rows:
                 item = dict(row)
-                # แปลง UUID เป็น string
                 if item.get('uuid'):
                     item['uuid'] = str(item['uuid'])
                 if item.get('clothing_uuid'):
                     item['clothing_uuid'] = str(item['clothing_uuid'])
                 items.append(item)
             
-            # คำนวณสรุป
             total_items = len(items)
             total_quantity = sum(item['quantity'] for item in items)
             total_price = sum(float(item['total_price']) for item in items)
@@ -110,25 +97,17 @@ async def get_person_baskets(user_id: int):
             }
             
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
-# GET: ดึงจำนวนสินค้าในตะกร้าทั้งหมด
+# GET: นับจำนวนสินค้าในตะกร้า
 # ============================================================================
 
-@router.get("/get/person-baskets/count/{user_id}")
-async def get_basket_count(user_id: int):
-    """
-    Get total count and quantity of items in basket
-    """
+@router.get("/get/person-baskets/count/{firebase_uid}")
+async def get_basket_count(firebase_uid: str):
+    """Get total count and quantity of items in basket"""
     try:
         pool = await get_db_pool()
         
@@ -138,26 +117,20 @@ async def get_basket_count(user_id: int):
                     COUNT(*) as total_items,
                     COALESCE(SUM(quantity), 0) as total_quantity
                 FROM user_baskets
-                WHERE user_id = $1
+                WHERE firebase_uid = $1
             """
-            result = await connection.fetchrow(query, user_id)
+            result = await connection.fetchrow(query, firebase_uid)
             
             return {
-                "user_id": user_id,
+                "firebase_uid": firebase_uid,
                 "total_items": result['total_items'],
                 "total_quantity": result['total_quantity']
             }
             
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
 # POST: เพิ่มสินค้าลงตะกร้า
@@ -165,26 +138,19 @@ async def get_basket_count(user_id: int):
 
 @router.post("/post/person-baskets")
 async def post_person_baskets(data: BasketItem):
-    """
-    Add an item to user's shopping basket
-    
-    Request Body:
-    - user_id: int (person_login_catshop.id)
-    - clothing_uuid: str (UUID)
-    - quantity: int (default: 1)
-    """
+    """Add an item to user's shopping basket"""
     try:
         pool = await get_db_pool()
         
         async with pool.acquire() as connection:
-            # ตรวจสอบว่ามีอยู่แล้วหรือไม่
+            # เช็คว่ามีอยู่แล้วหรือไม่
             check_query = """
                 SELECT id, quantity FROM user_baskets
-                WHERE user_id = $1 AND clothing_uuid = $2
+                WHERE firebase_uid = $1 AND clothing_uuid = $2
             """
             existing = await connection.fetchrow(
                 check_query, 
-                data.user_id, 
+                data.firebase_uid, 
                 UUID(data.clothing_uuid)
             )
             
@@ -193,13 +159,13 @@ async def post_person_baskets(data: BasketItem):
                 update_query = """
                     UPDATE user_baskets
                     SET quantity = quantity + $1, updated_at = NOW()
-                    WHERE user_id = $2 AND clothing_uuid = $3
-                    RETURNING id, user_id, clothing_uuid, quantity, created_at, updated_at
+                    WHERE firebase_uid = $2 AND clothing_uuid = $3
+                    RETURNING id, firebase_uid, clothing_uuid, quantity, created_at, updated_at
                 """
                 result = await connection.fetchrow(
                     update_query,
                     data.quantity,
-                    data.user_id,
+                    data.firebase_uid,
                     UUID(data.clothing_uuid)
                 )
                 
@@ -207,20 +173,17 @@ async def post_person_baskets(data: BasketItem):
                 if response.get('clothing_uuid'):
                     response['clothing_uuid'] = str(response['clothing_uuid'])
                 
-                return {
-                    "message": "Updated quantity in basket",
-                    "data": response
-                }
+                return {"message": "Updated quantity in basket", "data": response}
             else:
                 # เพิ่มรายการใหม่
                 insert_query = """
-                    INSERT INTO user_baskets (user_id, clothing_uuid, quantity)
+                    INSERT INTO user_baskets (firebase_uid, clothing_uuid, quantity)
                     VALUES ($1, $2, $3)
-                    RETURNING id, user_id, clothing_uuid, quantity, created_at, updated_at
+                    RETURNING id, firebase_uid, clothing_uuid, quantity, created_at, updated_at
                 """
                 result = await connection.fetchrow(
                     insert_query, 
-                    data.user_id, 
+                    data.firebase_uid, 
                     UUID(data.clothing_uuid),
                     data.quantity
                 )
@@ -229,203 +192,71 @@ async def post_person_baskets(data: BasketItem):
                 if response.get('clothing_uuid'):
                     response['clothing_uuid'] = str(response['clothing_uuid'])
                 
-                return {
-                    "message": "Added to basket successfully",
-                    "data": response
-                }
+                return {"message": "Added to basket successfully", "data": response}
             
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
-# PUT: อัพเดทจำนวนสินค้าในตะกร้า
+# PUT: อัพเดทจำนวนสินค้า
 # ============================================================================
 
 @router.put("/put/person-baskets/quantity")
 async def update_basket_quantity(data: UpdateQuantity):
-    """
-    Update quantity of an item in basket
-    
-    Request Body:
-    - user_id: int
-    - clothing_uuid: str
-    - quantity: int (ถ้าเป็น 0 จะลบออก)
-    """
+    """Update quantity of an item in basket"""
     try:
         pool = await get_db_pool()
         
         async with pool.acquire() as connection:
             if data.quantity <= 0:
-                # ถ้าจำนวนเป็น 0 หรือติดลบ ให้ลบออก
+                # ลบออกถ้าจำนวนเป็น 0
                 delete_query = """
                     DELETE FROM user_baskets
-                    WHERE user_id = $1 AND clothing_uuid = $2
+                    WHERE firebase_uid = $1 AND clothing_uuid = $2
                     RETURNING id
                 """
                 deleted_id = await connection.fetchval(
                     delete_query,
-                    data.user_id,
+                    data.firebase_uid,
                     UUID(data.clothing_uuid)
                 )
                 
                 if not deleted_id:
-                    raise HTTPException(
-                        status_code=404,
-                        detail="Item not found in basket"
-                    )
+                    raise HTTPException(status_code=404, detail="Item not found in basket")
                 
-                return {
-                    "message": "Item removed from basket",
-                    "deleted_id": deleted_id
-                }
+                return {"message": "Item removed from basket", "deleted_id": deleted_id}
             else:
                 # อัพเดทจำนวน
                 update_query = """
                     UPDATE user_baskets
                     SET quantity = $1, updated_at = NOW()
-                    WHERE user_id = $2 AND clothing_uuid = $3
-                    RETURNING id, user_id, clothing_uuid, quantity, created_at, updated_at
+                    WHERE firebase_uid = $2 AND clothing_uuid = $3
+                    RETURNING id, firebase_uid, clothing_uuid, quantity, created_at, updated_at
                 """
                 result = await connection.fetchrow(
                     update_query,
                     data.quantity,
-                    data.user_id,
+                    data.firebase_uid,
                     UUID(data.clothing_uuid)
                 )
                 
                 if not result:
-                    raise HTTPException(
-                        status_code=404,
-                        detail="Item not found in basket"
-                    )
+                    raise HTTPException(status_code=404, detail="Item not found in basket")
                 
                 response = dict(result)
                 if response.get('clothing_uuid'):
                     response['clothing_uuid'] = str(response['clothing_uuid'])
                 
-                return {
-                    "message": "Quantity updated successfully",
-                    "data": response
-                }
+                return {"message": "Quantity updated successfully", "data": response}
             
     except HTTPException:
         raise
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-# ============================================================================
-# POST: ดึงรายการตะกร้าแบบ Pagination
-# ============================================================================
-
-@router.post("/post/page-baskets")
-async def post_pagination_baskets(data: PaginationRequest):
-    """
-    Get paginated basket list
-    
-    Request Body:
-    - user_id: int
-    - page: int (default: 1)
-    - limit: int (default: 10)
-    """
-    try:
-        pool = await get_db_pool()
-        
-        async with pool.acquire() as connection:
-            offset = (data.page - 1) * data.limit
-            
-            # ดึงข้อมูล
-            query = """
-                SELECT 
-                    ub.id as basket_id,
-                    ub.user_id,
-                    ub.clothing_uuid,
-                    ub.quantity,
-                    ub.created_at,
-                    ub.updated_at,
-                    c.uuid,
-                    c.clothing_name,
-                    c.price,
-                    c.discount_price,
-                    c.stock,
-                    c.image_url,
-                    c.category,
-                    c.size_category,
-                    c.gender,
-                    c.breed,
-                    CASE 
-                        WHEN c.discount_price > 0 THEN c.discount_price * ub.quantity
-                        ELSE c.price * ub.quantity
-                    END as total_price
-                FROM user_baskets ub
-                INNER JOIN cat_clothing c ON ub.clothing_uuid = c.uuid
-                WHERE ub.user_id = $1
-                ORDER BY ub.created_at DESC
-                LIMIT $2 OFFSET $3
-            """
-            rows = await connection.fetch(
-                query, 
-                data.user_id, 
-                data.limit, 
-                offset
-            )
-            
-            # นับจำนวนทั้งหมด
-            count_query = """
-                SELECT 
-                    COUNT(*) as total_items,
-                    COALESCE(SUM(quantity), 0) as total_quantity
-                FROM user_baskets
-                WHERE user_id = $1
-            """
-            count_result = await connection.fetchrow(count_query, data.user_id)
-            
-            items = []
-            for row in rows:
-                item = dict(row)
-                # แปลง UUID เป็น string
-                if item.get('uuid'):
-                    item['uuid'] = str(item['uuid'])
-                if item.get('clothing_uuid'):
-                    item['clothing_uuid'] = str(item['clothing_uuid'])
-                items.append(item)
-            
-            return {
-                "data": items,
-                "pagination": {
-                    "page": data.page,
-                    "limit": data.limit,
-                    "total_items": count_result['total_items'],
-                    "total_quantity": count_result['total_quantity'],
-                    "total_pages": (count_result['total_items'] + data.limit - 1) // data.limit
-                }
-            }
-            
-    except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
 # DELETE: ลบสินค้าออกจากตะกร้า
@@ -433,74 +264,54 @@ async def post_pagination_baskets(data: PaginationRequest):
 
 @router.delete("/del/person-baskets")
 async def del_person_baskets(
-    user_id: int = Body(...), 
+    firebase_uid: str = Body(...), 
     clothing_uuid: str = Body(...)
 ):
-    """
-    Remove an item from user's basket
-    
-    Request Body:
-    - user_id: int
-    - clothing_uuid: str (UUID)
-    """
+    """Remove an item from user's basket"""
     try:
         pool = await get_db_pool()
         
         async with pool.acquire() as connection:
             delete_query = """
                 DELETE FROM user_baskets
-                WHERE user_id = $1 AND clothing_uuid = $2
+                WHERE firebase_uid = $1 AND clothing_uuid = $2
                 RETURNING id
             """
             deleted_id = await connection.fetchval(
                 delete_query, 
-                user_id, 
+                firebase_uid, 
                 UUID(clothing_uuid)
             )
             
             if not deleted_id:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Basket item not found"
-                )
+                raise HTTPException(status_code=404, detail="Basket item not found")
             
-            return {
-                "message": "Removed from basket successfully",
-                "deleted_id": deleted_id
-            }
+            return {"message": "Removed from basket successfully", "deleted_id": deleted_id}
             
     except HTTPException:
         raise
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
-# DELETE: ล้างตะกร้าทั้งหมดของ User
+# DELETE: ล้างตะกร้าทั้งหมด
 # ============================================================================
 
-@router.delete("/del/person-baskets/clear/{user_id}")
-async def clear_all_baskets(user_id: int):
-    """
-    Clear all items from user's basket
-    """
+@router.delete("/del/person-baskets/clear/{firebase_uid}")
+async def clear_all_baskets(firebase_uid: str):
+    """Clear all items from user's basket"""
     try:
         pool = await get_db_pool()
         
         async with pool.acquire() as connection:
             delete_query = """
                 DELETE FROM user_baskets
-                WHERE user_id = $1
+                WHERE firebase_uid = $1
                 RETURNING id
             """
-            deleted_ids = await connection.fetch(delete_query, user_id)
+            deleted_ids = await connection.fetch(delete_query, firebase_uid)
             
             return {
                 "message": "Basket cleared successfully",
@@ -508,12 +319,6 @@ async def clear_all_baskets(user_id: int):
             }
             
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

@@ -9,29 +9,26 @@ from app.db.database import get_db_pool
 router = APIRouter()
 
 # ============================================================================
-# Pydantic Models
+# Pydantic Models (ใช้ firebase_uid แทน user_id)
 # ============================================================================
 
 class FavouriteItem(BaseModel):
-    user_id: int  # person_login_catshop.id
-    clothing_uuid: str  # UUID as string
+    firebase_uid: str  # ✅ เปลี่ยนจาก user_id → firebase_uid
+    clothing_uuid: str
 
 class PaginationRequest(BaseModel):
-    user_id: int
+    firebase_uid: str  # ✅ เปลี่ยนจาก user_id
     page: int = 1
     limit: int = 10
 
 # ============================================================================
-# GET: ดึงรายการโปรดทั้งหมดของ User
+# GET: ดึงรายการโปรดทั้งหมด
 # ============================================================================
 
-@router.get("/get/person-favourite/{user_id}")
-async def get_person_favourite(user_id: int):
+@router.get("/get/person-favourite/{firebase_uid}")
+async def get_person_favourite(firebase_uid: str):
     """
-    Get favourite list for a specific user
-    
-    Returns:
-    - List of favourite items with full product details from cat_clothing
+    Get favourite list for a specific user by firebase_uid
     """
     try:
         pool = await get_db_pool()
@@ -40,7 +37,7 @@ async def get_person_favourite(user_id: int):
             query = """
                 SELECT 
                     uf.id as favourite_id,
-                    uf.user_id,
+                    uf.firebase_uid,
                     uf.clothing_uuid,
                     uf.created_at,
                     c.uuid,
@@ -58,10 +55,10 @@ async def get_person_favourite(user_id: int):
                     c.images
                 FROM user_favorites uf
                 INNER JOIN cat_clothing c ON uf.clothing_uuid = c.uuid
-                WHERE uf.user_id = $1
+                WHERE uf.firebase_uid = $1
                 ORDER BY uf.created_at DESC
             """
-            rows = await connection.fetch(query, user_id)
+            rows = await connection.fetch(query, firebase_uid)
             
             if not rows:
                 return []
@@ -69,7 +66,6 @@ async def get_person_favourite(user_id: int):
             result = []
             for row in rows:
                 item = dict(row)
-                # แปลง UUID เป็น string
                 if item.get('uuid'):
                     item['uuid'] = str(item['uuid'])
                 if item.get('clothing_uuid'):
@@ -79,25 +75,17 @@ async def get_person_favourite(user_id: int):
             return result
             
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
-# GET: ดึงจำนวนรายการโปรดทั้งหมด
+# GET: นับจำนวนรายการโปรด
 # ============================================================================
 
-@router.get("/get/person-favourite/count/{user_id}")
-async def get_favourite_count(user_id: int):
-    """
-    Get total count of favourite items for a user
-    """
+@router.get("/get/person-favourite/count/{firebase_uid}")
+async def get_favourite_count(firebase_uid: str):
+    """Get total count of favourite items"""
     try:
         pool = await get_db_pool()
         
@@ -105,268 +93,128 @@ async def get_favourite_count(user_id: int):
             query = """
                 SELECT COUNT(*) as total
                 FROM user_favorites
-                WHERE user_id = $1
+                WHERE firebase_uid = $1
             """
-            result = await connection.fetchval(query, user_id)
+            result = await connection.fetchval(query, firebase_uid)
             
-            return {"user_id": user_id, "total": result}
+            return {"firebase_uid": firebase_uid, "total": result}
             
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
-# POST: เพิ่มสินค้าเข้ารายการโปรด
+# POST: เพิ่มรายการโปรด
 # ============================================================================
 
 @router.post("/post/person-favourite")
 async def post_person_favourite(data: FavouriteItem):
-    """
-    Add an item to user's favourites
-    
-    Request Body:
-    - user_id: int (person_login_catshop.id)
-    - clothing_uuid: str (UUID from cat_clothing)
-    """
+    """Add an item to user's favourites"""
     try:
         pool = await get_db_pool()
         
         async with pool.acquire() as connection:
-            # ตรวจสอบว่ามีอยู่แล้วหรือไม่
+            # เช็คว่ามีอยู่แล้วหรือไม่
             check_query = """
                 SELECT id FROM user_favorites
-                WHERE user_id = $1 AND clothing_uuid = $2
+                WHERE firebase_uid = $1 AND clothing_uuid = $2
             """
             existing = await connection.fetchval(
                 check_query, 
-                data.user_id, 
+                data.firebase_uid, 
                 UUID(data.clothing_uuid)
             )
             
             if existing:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Item already in favourites"
-                )
+                raise HTTPException(status_code=400, detail="Item already in favourites")
             
             # เพิ่มรายการใหม่
             insert_query = """
-                INSERT INTO user_favorites (user_id, clothing_uuid)
+                INSERT INTO user_favorites (firebase_uid, clothing_uuid)
                 VALUES ($1, $2)
-                RETURNING id, user_id, clothing_uuid, created_at
+                RETURNING id, firebase_uid, clothing_uuid, created_at
             """
             result = await connection.fetchrow(
                 insert_query, 
-                data.user_id, 
+                data.firebase_uid, 
                 UUID(data.clothing_uuid)
             )
             
             response = dict(result)
-            # แปลง UUID เป็น string
             if response.get('clothing_uuid'):
                 response['clothing_uuid'] = str(response['clothing_uuid'])
             
-            return {
-                "message": "Added to favourites successfully",
-                "data": response
-            }
+            return {"message": "Added to favourites successfully", "data": response}
             
     except HTTPException:
         raise
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
-# POST: ดึงรายการโปรดแบบ Pagination
-# ============================================================================
-
-@router.post("/post/page-favourite")
-async def post_pagination_favourite(data: PaginationRequest):
-    """
-    Get paginated favourite list
-    
-    Request Body:
-    - user_id: int
-    - page: int (default: 1)
-    - limit: int (default: 10)
-    """
-    try:
-        pool = await get_db_pool()
-        
-        async with pool.acquire() as connection:
-            offset = (data.page - 1) * data.limit
-            
-            # ดึงข้อมูล
-            query = """
-                SELECT 
-                    uf.id as favourite_id,
-                    uf.user_id,
-                    uf.clothing_uuid,
-                    uf.created_at,
-                    c.uuid,
-                    c.clothing_name,
-                    c.price,
-                    c.discount_price,
-                    c.stock,
-                    c.image_url,
-                    c.category,
-                    c.size_category,
-                    c.gender,
-                    c.breed,
-                    c.description
-                FROM user_favorites uf
-                INNER JOIN cat_clothing c ON uf.clothing_uuid = c.uuid
-                WHERE uf.user_id = $1
-                ORDER BY uf.created_at DESC
-                LIMIT $2 OFFSET $3
-            """
-            rows = await connection.fetch(
-                query, 
-                data.user_id, 
-                data.limit, 
-                offset
-            )
-            
-            # นับจำนวนทั้งหมด
-            count_query = """
-                SELECT COUNT(*) FROM user_favorites
-                WHERE user_id = $1
-            """
-            total = await connection.fetchval(count_query, data.user_id)
-            
-            result = []
-            for row in rows:
-                item = dict(row)
-                # แปลง UUID เป็น string
-                if item.get('uuid'):
-                    item['uuid'] = str(item['uuid'])
-                if item.get('clothing_uuid'):
-                    item['clothing_uuid'] = str(item['clothing_uuid'])
-                result.append(item)
-            
-            return {
-                "data": result,
-                "pagination": {
-                    "page": data.page,
-                    "limit": data.limit,
-                    "total": total,
-                    "total_pages": (total + data.limit - 1) // data.limit
-                }
-            }
-            
-    except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-# ============================================================================
-# DELETE: ลบสินค้าออกจากรายการโปรด
+# DELETE: ลบรายการโปรด
 # ============================================================================
 
 @router.delete("/del/person-favourite")
 async def del_person_favourite(
-    user_id: int = Body(...), 
+    firebase_uid: str = Body(...), 
     clothing_uuid: str = Body(...)
 ):
-    """
-    Remove an item from user's favourites
-    
-    Request Body:
-    - user_id: int
-    - clothing_uuid: str (UUID)
-    """
+    """Remove an item from user's favourites"""
     try:
         pool = await get_db_pool()
         
         async with pool.acquire() as connection:
             delete_query = """
                 DELETE FROM user_favorites
-                WHERE user_id = $1 AND clothing_uuid = $2
+                WHERE firebase_uid = $1 AND clothing_uuid = $2
                 RETURNING id
             """
             deleted_id = await connection.fetchval(
                 delete_query, 
-                user_id, 
+                firebase_uid, 
                 UUID(clothing_uuid)
             )
             
             if not deleted_id:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Favourite item not found"
-                )
+                raise HTTPException(status_code=404, detail="Favourite item not found")
             
-            return {
-                "message": "Removed from favourites successfully",
-                "deleted_id": deleted_id
-            }
+            return {"message": "Removed from favourites successfully", "deleted_id": deleted_id}
             
     except HTTPException:
         raise
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
-# GET: ตรวจสอบว่าสินค้าอยู่ใน Favourite หรือไม่
+# GET: เช็คว่าอยู่ใน Favourite หรือไม่
 # ============================================================================
 
-@router.get("/get/check-favourite/{user_id}/{clothing_uuid}")
-async def check_favourite(user_id: int, clothing_uuid: str):
-    """
-    Check if an item is in user's favourites
-    """
+@router.get("/get/check-favourite/{firebase_uid}/{clothing_uuid}")
+async def check_favourite(firebase_uid: str, clothing_uuid: str):
+    """Check if an item is in user's favourites"""
     try:
         pool = await get_db_pool()
         
         async with pool.acquire() as connection:
             query = """
                 SELECT id FROM user_favorites
-                WHERE user_id = $1 AND clothing_uuid = $2
+                WHERE firebase_uid = $1 AND clothing_uuid = $2
             """
-            result = await connection.fetchval(query, user_id, UUID(clothing_uuid))
+            result = await connection.fetchval(query, firebase_uid, UUID(clothing_uuid))
             
             return {
-                "user_id": user_id,
+                "firebase_uid": firebase_uid,
                 "clothing_uuid": clothing_uuid,
                 "is_favourite": result is not None
             }
             
     except asyncpg.PostgresError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
