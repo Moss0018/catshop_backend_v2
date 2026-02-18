@@ -46,6 +46,7 @@ async def get_person_favourite(firebase_uid: str):
                     c.discount_price,
                     c.stock,
                     c.image_url,
+                    c.images,
                     c.category,
                     c.size_category,
                     c.gender,
@@ -217,4 +218,4 @@ async def check_favourite(firebase_uid: str, clothing_uuid: str):
     except asyncpg.PostgresError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") 

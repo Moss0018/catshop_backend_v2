@@ -147,6 +147,7 @@ async def search_btn_outfit(
             query = f"""
                 SELECT 
                     id,
+                    uuid,
                     image_url,
                     images,
                     clothing_name,
@@ -246,6 +247,7 @@ async def search_clothing_page(
             items_sql = f"""
             SELECT 
                 c.id,
+                c.uuid,
                 c.image_url,
                 c.images,
                 c.clothing_name,
