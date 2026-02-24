@@ -39,7 +39,7 @@ async def create_cat(
     cat: dict,                                        # รับ JSON body ตรงๆ
     user: dict = Depends(verify_firebase_token)
 ):
-    firebase_uid = user.get("uid")
+    firebase_uid = user.get("firebase_uid")
     if not firebase_uid:
         raise HTTPException(status_code=401, detail="Invalid Firebase token")
 
@@ -129,7 +129,7 @@ async def search_cats(
     limit: int = 100,
     user: dict = Depends(verify_firebase_token)
 ):
-    firebase_uid = user.get("uid")
+    firebase_uid = user.get("firebase_uid")
 
     # สร้าง WHERE clause แบบ dynamic
     conditions = ["firebase_uid = $1"]
@@ -202,7 +202,7 @@ async def get_user_cats(
     limit: int = 100,
     user: dict = Depends(verify_firebase_token)
 ):
-    firebase_uid = user.get("uid")
+    firebase_uid = user.get("firebase_uid")
     if not firebase_uid:
         raise HTTPException(status_code=401, detail="Invalid Firebase token")
 
@@ -246,7 +246,7 @@ async def get_cat(
     cat_id: int,
     user: dict = Depends(verify_firebase_token)
 ):
-    firebase_uid = user.get("uid")
+    firebase_uid = user.get("firebase_uid")
 
     try:
         pool = await get_db_pool()
@@ -279,7 +279,7 @@ async def update_cat(
     payload: dict,
     user: dict = Depends(verify_firebase_token)
 ):
-    firebase_uid = user.get("uid")
+    firebase_uid = user.get("firebase_uid")
 
     try:
         pool = await get_db_pool()
@@ -341,7 +341,7 @@ async def delete_cat(
     cat_id: int,
     user: dict = Depends(verify_firebase_token)
 ):
-    firebase_uid = user.get("uid")
+    firebase_uid = user.get("firebase_uid")
 
     try:
         pool = await get_db_pool()
@@ -422,7 +422,7 @@ async def analyze_and_save_cat(
     thumbnail_url: Optional[str] = None,
     user: dict = Depends(verify_firebase_token)
 ):
-    firebase_uid = user.get("uid")
+    firebase_uid = user.get("firebase_uid")
     if not firebase_uid:
         raise HTTPException(status_code=401, detail="Invalid Firebase token")
 
