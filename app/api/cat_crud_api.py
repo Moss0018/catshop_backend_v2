@@ -1,408 +1,418 @@
-# Crud Cat api 
+# Crud Cat api — asyncpg version (consistent with vision.py)
 
-from fastapi import APIRouter, HTTPException, Depends, status
-from sqlalchemy.orm import Session
+import json
 from datetime import datetime
+from fastapi import APIRouter, HTTPException, Depends, status
 from typing import Optional, List
 
-from app.db.database import get_db
-from app.models.dbcat import Cat
+from app.db.database import get_db_pool
 from app.auth.dependencies import verify_firebase_token
-from app.utils.response import success_response, error_response
+from app.utils.response import success_response
 from app.services.analysis_cat import analyze_cat
 
-from app.schemas.cat import (
-    CatCreate, 
-    CatUpdate, 
-    CatResponse, 
-    
-)
-
 router = APIRouter()
+
+
+# ─────────────────────────────────────────────
+# helper: แปลง asyncpg Record → dict
+# ─────────────────────────────────────────────
+def _row(record) -> dict:
+    return dict(record) if record else {}
+
+
+def _rows(records) -> list:
+    return [dict(r) for r in records]
+
+
+def _f(value) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (ValueError, TypeError):
+        return None
+
 
 # ============================================
 # CREATE - สร้างข้อมูลแมว
 # ============================================
 @router.post("/system/cats", response_model=dict, status_code=status.HTTP_201_CREATED)
-def create_cat(
-    cat: CatCreate,
-    db: Session = Depends(get_db),
+async def create_cat(
+    cat: dict,                                        # รับ JSON body ตรงๆ
     user: dict = Depends(verify_firebase_token)
 ):
-    """
-    Create a new cat record
-    
-    **Authentication:** Firebase ID Token required
-    
-    **Body:**
-    - firebase_uid: Firebase UID (from auth token)
-    - name: Cat name/color
-    - breed: Cat breed (optional)
-    - age: Cat age in years (optional)
-    - weight: Cat weight in kg
-    - size_category: XS, S, M, L, XL
-    - chest_cm: Chest circumference in cm
-    - neck_cm: Neck circumference in cm (optional)
-    - body_length_cm: Body length in cm (optional)
-    - confidence: Prediction confidence (0-1)
-    - image_url: Full image URL
-    - thumbnail_url: Thumbnail URL (optional)
-    """
+    firebase_uid = user.get("uid")
+    if not firebase_uid:
+        raise HTTPException(status_code=401, detail="Invalid Firebase token")
+
     try:
-        # 🔐 ดึง firebase_uid จาก token
-        firebase_uid = user.get("uid")
-        
-        if not firebase_uid:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid Firebase token"
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO cat (
+                    firebase_uid, cat_color, breed, age, gender,
+                    weight, size_category,
+                    chest_cm, neck_cm, waist_cm,
+                    body_length_cm, back_length_cm, leg_length_cm,
+                    confidence, bounding_box,
+                    image_cat, thumbnail_url,
+                    age_category,
+                    body_condition_score, body_condition, body_condition_description,
+                    bmi, posture, size_recommendation,
+                    size_ranges, quality_flag,
+                    analysis_version, analysis_method,
+                    detected_at, updated_at
+                ) VALUES (
+                    $1,  $2,  $3,  $4,  $5,
+                    $6,  $7,
+                    $8,  $9,  $10,
+                    $11, $12, $13,
+                    $14, $15::jsonb,
+                    $16, $17,
+                    $18,
+                    $19, $20, $21,
+                    $22, $23, $24,
+                    $25::jsonb, $26,
+                    $27, $28,
+                    $29, $30
+                ) RETURNING *
+                """,
+                firebase_uid,
+                cat.get("cat_color"),
+                cat.get("breed"),
+                cat.get("age"),
+                cat.get("gender", 0),
+                _f(cat.get("weight")),
+                cat.get("size_category", "M"),
+                _f(cat.get("chest_cm")),
+                _f(cat.get("neck_cm")),
+                _f(cat.get("waist_cm")),
+                _f(cat.get("body_length_cm")),
+                _f(cat.get("back_length_cm")),
+                _f(cat.get("leg_length_cm")),
+                _f(cat.get("confidence", 0.9)),
+                json.dumps(cat.get("bounding_box", [])),
+                cat.get("image_cat"),
+                cat.get("thumbnail_url"),
+                cat.get("age_category", "adult"),
+                cat.get("body_condition_score"),
+                cat.get("body_condition"),
+                cat.get("body_condition_description"),
+                _f(cat.get("bmi")),
+                cat.get("posture"),
+                cat.get("size_recommendation"),
+                json.dumps(cat.get("size_ranges")) if cat.get("size_ranges") else None,
+                cat.get("quality_flag", "good"),
+                cat.get("analysis_version", "2.0"),
+                cat.get("analysis_method", "manual"),
+                datetime.utcnow(),
+                datetime.utcnow(),
             )
-        
-        # สร้าง Cat object พร้อม firebase_uid
-        new_cat = Cat(
-            firebase_uid=firebase_uid,
-            **cat.model_dump(),
-            detected_at=datetime.utcnow()
-        )
-        
-        db.add(new_cat)
-        db.commit()
-        db.refresh(new_cat)
-        
-        return success_response(
-            data=CatResponse.from_orm(new_cat).model_dump(),
-            message="Cat created successfully"
-        )
-    
+
+        return success_response(data=_row(row), message="Cat created successfully")
+
     except HTTPException:
         raise
     except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create cat: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to create cat: {e}")
+
 
 # ============================================
-# READ - อ่านข้อมูลแมวทั้งหมดของ User
-# ============================================
-@router.get("/system/cats", response_model=dict)
-def get_user_cats(
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db),
-    user: dict = Depends(verify_firebase_token)
-):
-    """
-    Get all cats owned by the authenticated user
-    
-    **Authentication:** Firebase ID Token required
-    
-    **Query Parameters:**
-    - skip: Number of records to skip (default: 0)
-    - limit: Maximum number of records to return (default: 100)
-    """
-    try:
-        firebase_uid = user.get("uid")
-        
-        if not firebase_uid:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid Firebase token"
-            )
-        
-        # 🔥 Query เฉพาะแมวของ user คนนี้
-        cats = db.query(Cat)\
-                 .filter(Cat.firebase_uid == firebase_uid)\
-                 .order_by(Cat.detected_at.desc())\
-                 .offset(skip)\
-                 .limit(limit)\
-                 .all()
-        
-        total = db.query(Cat).filter(Cat.firebase_uid == firebase_uid).count()
-        
-        return success_response(
-            data={
-                "cats": [CatResponse.from_orm(cat).model_dump() for cat in cats],
-                "total": total,
-                "skip": skip,
-                "limit": limit
-            },
-            message=f"Retrieved {len(cats)} cats"
-        )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve cats: {str(e)}"
-        )
-
-# ============================================
-# READ - อ่านข้อมูลแมวตัวเดียว
-# ============================================
-@router.get("/system/cats/{cat_id}", response_model=dict)
-def get_cat(
-    cat_id: int,
-    db: Session = Depends(get_db),
-    user: dict = Depends(verify_firebase_token)
-):
-    """
-    Get a specific cat by ID (must be owned by user)
-    
-    **Authentication:** Firebase ID Token required
-    
-    **Path Parameters:**
-    - cat_id: Cat ID
-    """
-    firebase_uid = user.get("uid")
-    
-    # 🔒 ตรวจสอบว่าเป็นแมวของ user คนนี้
-    cat = db.query(Cat)\
-            .filter(Cat.id == cat_id)\
-            .filter(Cat.firebase_uid == firebase_uid)\
-            .first()
-    
-    if not cat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Cat with ID {cat_id} not found or not owned by you"
-        )
-    
-    return success_response(
-        data=CatResponse.from_orm(cat).model_dump(),
-        message="Cat retrieved successfully"
-    )
-
-# ============================================
-# UPDATE - อัปเดตข้อมูลแมว
-# ============================================
-@router.put("/system/cats/{cat_id}", response_model=dict)
-def update_cat(
-    cat_id: int,
-    payload: CatUpdate,
-    db: Session = Depends(get_db),
-    user: dict = Depends(verify_firebase_token)
-):
-    """
-    Update a cat record (must be owned by user)
-    
-    **Authentication:** Firebase ID Token required
-    
-    **Path Parameters:**
-    - cat_id: Cat ID
-    
-    **Body:** All fields are optional
-    - name, breed, age, weight, etc.
-    """
-    firebase_uid = user.get("uid")
-    
-    # 🔒 ตรวจสอบว่าเป็นแมวของ user คนนี้
-    cat = db.query(Cat)\
-            .filter(Cat.id == cat_id)\
-            .filter(Cat.firebase_uid == firebase_uid)\
-            .first()
-    
-    if not cat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Cat with ID {cat_id} not found or not owned by you"
-        )
-    
-    try:
-        # Update only provided fields
-        update_data = payload.model_dump(exclude_unset=True)
-        
-        for key, value in update_data.items():
-            setattr(cat, key, value)
-        
-        cat.updated_at = datetime.utcnow()
-        
-        db.commit()
-        db.refresh(cat)
-        
-        return success_response(
-            data=CatResponse.from_orm(cat).model_dump(),
-            message="Cat updated successfully"
-        )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update cat: {str(e)}"
-        )
-
-# ============================================
-# DELETE - ลบข้อมูลแมว
-# ============================================
-@router.delete("/system/cats/{cat_id}", response_model=dict)
-def delete_cat(
-    cat_id: int,
-    db: Session = Depends(get_db),
-    user: dict = Depends(verify_firebase_token)
-):
-    """
-    Delete a cat record (must be owned by user)
-    
-    **Authentication:** Firebase ID Token required
-    
-    **Path Parameters:**
-    - cat_id: Cat ID
-    """
-    firebase_uid = user.get("uid")
-    
-    # 🔒 ตรวจสอบว่าเป็นแมวของ user คนนี้
-    cat = db.query(Cat)\
-            .filter(Cat.id == cat_id)\
-            .filter(Cat.firebase_uid == firebase_uid)\
-            .first()
-    
-    if not cat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Cat with ID {cat_id} not found or not owned by you"
-        )
-    
-    try:
-        db.delete(cat)
-        db.commit()
-        
-        return success_response(
-            data={"id": cat_id, "deleted": True},
-            message="Cat deleted successfully"
-        )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete cat: {str(e)}"
-        )
-
-# ============================================
-# SEARCH - ค้นหาแมวตามเกณฑ์ (ของ User คนนั้น)
+# SEARCH - ต้องอยู่ก่อน /{cat_id} เสมอ!
 # ============================================
 @router.get("/system/cats/search", response_model=dict)
-def search_cats(
+async def search_cats(
     breed: Optional[str] = None,
     size_category: Optional[str] = None,
     min_weight: Optional[float] = None,
     max_weight: Optional[float] = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db),
     user: dict = Depends(verify_firebase_token)
 ):
-    """
-    Search cats by criteria (only user's cats)
-    
-    **Authentication:** Firebase ID Token required
-    
-    **Query Parameters:**
-    - breed: Filter by breed (optional)
-    - size_category: Filter by size (XS, S, M, L, XL) (optional)
-    - min_weight: Minimum weight in kg (optional)
-    - max_weight: Maximum weight in kg (optional)
-    - skip: Pagination skip (default: 0)
-    - limit: Pagination limit (default: 100)
-    """
     firebase_uid = user.get("uid")
-    
-    # 🔥 เริ่มจาก query แมวของ user คนนี้
-    query = db.query(Cat).filter(Cat.firebase_uid == firebase_uid)
-    
-    if breed:
-        query = query.filter(Cat.breed.ilike(f"%{breed}%"))
-    
-    if size_category:
-        query = query.filter(Cat.size_category == size_category)
-    
-    if min_weight:
-        query = query.filter(Cat.weight >= min_weight)
-    
-    if max_weight:
-        query = query.filter(Cat.weight <= max_weight)
-    
-    total = query.count()
-    cats = query.order_by(Cat.detected_at.desc()).offset(skip).limit(limit).all()
-    
-    return success_response(
-        data={
-            "cats": [CatResponse.from_orm(cat).model_dump() for cat in cats],
-            "total": total,
-            "skip": skip,
-            "limit": limit,
-            "filters": {
-                "breed": breed,
-                "size_category": size_category,
-                "min_weight": min_weight,
-                "max_weight": max_weight
-            }
-        },
-        message=f"Found {len(cats)} cats matching criteria"
-    )
 
-# ============================================
-# ADMIN - ดูแมวทั้งหมดในระบบ (Admin only)
-# ============================================
-@router.get("/system/admin/cats/all", response_model=dict)
-def get_all_cats_admin(
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db),
-    user: dict = Depends(verify_firebase_token)
-):
-    """
-    Get ALL cats in system (Admin only)
-    
-    **Authentication:** Firebase ID Token required + Admin role
-    
-    **Query Parameters:**
-    - skip: Number of records to skip (default: 0)
-    - limit: Maximum number of records to return (default: 100)
-    """
-    # TODO: เพิ่มการตรวจสอบ admin role
-    # if not user.get("is_admin"):
-    #     raise HTTPException(status_code=403, detail="Admin access required")
-    
+    # สร้าง WHERE clause แบบ dynamic
+    conditions = ["firebase_uid = $1"]
+    params: list = [firebase_uid]
+    idx = 2
+
+    if breed:
+        conditions.append(f"breed ILIKE ${idx}")
+        params.append(f"%{breed}%")
+        idx += 1
+
+    if size_category:
+        conditions.append(f"size_category = ${idx}")
+        params.append(size_category)
+        idx += 1
+
+    if min_weight is not None:
+        conditions.append(f"weight >= ${idx}")
+        params.append(min_weight)
+        idx += 1
+
+    if max_weight is not None:
+        conditions.append(f"weight <= ${idx}")
+        params.append(max_weight)
+        idx += 1
+
+    where = " AND ".join(conditions)
+
     try:
-        cats = db.query(Cat)\
-                 .order_by(Cat.detected_at.desc())\
-                 .offset(skip)\
-                 .limit(limit)\
-                 .all()
-        
-        total = db.query(Cat).count()
-        
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            total = await conn.fetchval(
+                f"SELECT COUNT(*) FROM cat WHERE {where}", *params
+            )
+            cats = await conn.fetch(
+                f"""
+                SELECT * FROM cat WHERE {where}
+                ORDER BY detected_at DESC
+                OFFSET ${idx} LIMIT ${idx+1}
+                """,
+                *params, skip, limit
+            )
+
         return success_response(
             data={
-                "cats": [CatResponse.from_orm(cat).model_dump() for cat in cats],
+                "cats": _rows(cats),
                 "total": total,
                 "skip": skip,
-                "limit": limit
+                "limit": limit,
+                "filters": {
+                    "breed": breed,
+                    "size_category": size_category,
+                    "min_weight": min_weight,
+                    "max_weight": max_weight,
+                }
+            },
+            message=f"Found {len(cats)} cats matching criteria"
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to search cats: {e}")
+
+
+# ============================================
+# READ ALL - ดึงแมวทั้งหมดของ User
+# ============================================
+@router.get("/system/cats", response_model=dict)
+async def get_user_cats(
+    skip: int = 0,
+    limit: int = 100,
+    user: dict = Depends(verify_firebase_token)
+):
+    firebase_uid = user.get("uid")
+    if not firebase_uid:
+        raise HTTPException(status_code=401, detail="Invalid Firebase token")
+
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM cat WHERE firebase_uid = $1", firebase_uid
+            )
+            cats = await conn.fetch(
+                """
+                SELECT * FROM cat
+                WHERE firebase_uid = $1
+                ORDER BY detected_at DESC
+                OFFSET $2 LIMIT $3
+                """,
+                firebase_uid, skip, limit
+            )
+
+        return success_response(
+            data={
+                "cats": _rows(cats),
+                "total": total,
+                "skip": skip,
+                "limit": limit,
+            },
+            message=f"Retrieved {len(cats)} cats"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve cats: {e}")
+
+
+# ============================================
+# READ ONE - ดึงแมวตัวเดียว
+# ============================================
+@router.get("/system/cats/{cat_id}", response_model=dict)
+async def get_cat(
+    cat_id: int,
+    user: dict = Depends(verify_firebase_token)
+):
+    firebase_uid = user.get("uid")
+
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            cat = await conn.fetchrow(
+                "SELECT * FROM cat WHERE id = $1 AND firebase_uid = $2",
+                cat_id, firebase_uid
+            )
+
+        if not cat:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Cat {cat_id} not found or not owned by you"
+            )
+
+        return success_response(data=_row(cat), message="Cat retrieved successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get cat: {e}")
+
+
+# ============================================
+# UPDATE - อัปเดตข้อมูลแมว
+# ============================================
+@router.put("/system/cats/{cat_id}", response_model=dict)
+async def update_cat(
+    cat_id: int,
+    payload: dict,
+    user: dict = Depends(verify_firebase_token)
+):
+    firebase_uid = user.get("uid")
+
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            # ตรวจสอบว่าเป็นเจ้าของก่อน
+            exists = await conn.fetchval(
+                "SELECT id FROM cat WHERE id = $1 AND firebase_uid = $2",
+                cat_id, firebase_uid
+            )
+            if not exists:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Cat {cat_id} not found or not owned by you"
+                )
+
+            # สร้าง SET clause แบบ dynamic จาก fields ที่ส่งมา
+            allowed = {
+                "cat_color", "breed", "age", "gender", "weight",
+                "size_category", "chest_cm", "neck_cm", "waist_cm",
+                "body_length_cm", "back_length_cm", "leg_length_cm",
+                "confidence", "age_category", "body_condition_score",
+                "body_condition", "body_condition_description", "bmi",
+                "posture", "size_recommendation", "quality_flag",
+                "analysis_version", "analysis_method", "image_cat", "thumbnail_url"
+            }
+            updates = {k: v for k, v in payload.items() if k in allowed}
+
+            if not updates:
+                raise HTTPException(status_code=400, detail="No valid fields to update")
+
+            set_clause = ", ".join(
+                f"{col} = ${i+2}" for i, col in enumerate(updates.keys())
+            )
+            values = list(updates.values())
+
+            row = await conn.fetchrow(
+                f"""
+                UPDATE cat
+                SET {set_clause}, updated_at = NOW()
+                WHERE id = $1
+                RETURNING *
+                """,
+                cat_id, *values
+            )
+
+        return success_response(data=_row(row), message="Cat updated successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update cat: {e}")
+
+
+# ============================================
+# DELETE - ลบข้อมูลแมว
+# ============================================
+@router.delete("/system/cats/{cat_id}", response_model=dict)
+async def delete_cat(
+    cat_id: int,
+    user: dict = Depends(verify_firebase_token)
+):
+    firebase_uid = user.get("uid")
+
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            deleted = await conn.fetchval(
+                """
+                DELETE FROM cat
+                WHERE id = $1 AND firebase_uid = $2
+                RETURNING id
+                """,
+                cat_id, firebase_uid
+            )
+
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Cat {cat_id} not found or not owned by you"
+            )
+
+        return success_response(
+            data={"id": cat_id, "deleted": True},
+            message="Cat deleted successfully"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete cat: {e}")
+
+
+# ============================================
+# ADMIN - ดูแมวทั้งหมดในระบบ
+# ============================================
+@router.get("/system/admin/cats/all", response_model=dict)
+async def get_all_cats_admin(
+    skip: int = 0,
+    limit: int = 100,
+    user: dict = Depends(verify_firebase_token)
+):
+    # TODO: เปิดตรวจสอบ admin role เมื่อพร้อม
+    # if not user.get("is_admin"):
+    #     raise HTTPException(status_code=403, detail="Admin access required")
+
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            total = await conn.fetchval("SELECT COUNT(*) FROM cat")
+            cats = await conn.fetch(
+                "SELECT * FROM cat ORDER BY detected_at DESC OFFSET $1 LIMIT $2",
+                skip, limit
+            )
+
+        return success_response(
+            data={
+                "cats": _rows(cats),
+                "total": total,
+                "skip": skip,
+                "limit": limit,
             },
             message=f"Retrieved {len(cats)} cats (admin view)"
         )
-    
+
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve cats: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve cats: {e}")
 
 
 # ============================================
-# 🔥 NEW ENDPOINT - บันทึกผลการวิเคราะห์ 
+# ANALYSIS SAVE - วิเคราะห์และบันทึกแมว
 # ============================================
-
 @router.post("/system/analysis/save", response_model=dict, status_code=status.HTTP_201_CREATED)
-def analyze_and_save_cat(
+async def analyze_and_save_cat(
     image_path: str,
     bounding_box: List[float],
     cat_color: Optional[str] = None,
@@ -410,46 +420,15 @@ def analyze_and_save_cat(
     age_category: str = "adult",
     image_url: Optional[str] = None,
     thumbnail_url: Optional[str] = None,
-    db: Session = Depends(get_db),
     user: dict = Depends(verify_firebase_token)
 ):
-    """
-    🔥 **วิเคราะห์แมวและบันทึกเข้า DB ทันที** (1 Step)
-    
-    **ขั้นตอน:**
-    1. รับรูปภาพ + bounding_box
-    2. วิเคราะห์แมว (CatAnalyzer V5)
-    3. บันทึกเข้า Database ทันที
-    4. ส่งผลกลับพร้อม cat_id
-    
-    **Authentication:** Firebase ID Token required
-    
-    **Query Parameters:**
-    - image_path: path ของรูปภาพ (required)
-    - bounding_box: [x1, y1, x2, y2] จาก YOLO (required)
-    - cat_color: สีของแมว เช่น orange_white (optional)
-    - breed: สายพันธุ์ (optional, default: unknown)
-    - age_category: kitten/young/adult/senior (optional, default: adult)
-    - image_url: URL รูปภาพหลังอัปโหลด (optional)
-    - thumbnail_url: URL thumbnail (optional)
-    
-    **Example:**
-```
-    POST /api/system/analysis/analyze-and-save?image_path=uploads/cat.jpg&bounding_box=[100,150,400,450]&cat_color=orange_white
-```
-    """
+    firebase_uid = user.get("uid")
+    if not firebase_uid:
+        raise HTTPException(status_code=401, detail="Invalid Firebase token")
+
     try:
-        # 🔐 ดึง firebase_uid จาก token
-        firebase_uid = user.get("uid")
-        
-        if not firebase_uid:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid Firebase token"
-            )
-        
-        # 🐱 Step 1: วิเคราะห์แมว
-        analysis_result = analyze_cat(
+        # Step 1: วิเคราะห์แมว
+        analysis = analyze_cat(
             image_path=image_path,
             bounding_box=bounding_box,
             firebase_uid=firebase_uid,
@@ -457,65 +436,86 @@ def analyze_and_save_cat(
             breed=breed,
             age_category=age_category
         )
-        
-        # 📦 Step 2: แยก measurements ออกมา
-        measurements = analysis_result['measurements']
-        
-        # 💾 Step 3: บันทึกเข้า Database
-        new_cat = Cat(
-            firebase_uid=firebase_uid,
-            cat_color=analysis_result['cat_color'],
-            breed=analysis_result['breed'],
-            age_category=analysis_result['age_category'],
-            weight=analysis_result['weight_kg'],
-            body_condition_score=analysis_result['body_condition_score'],
-            body_condition=analysis_result['body_condition'],
-            body_condition_description=analysis_result['body_condition_description'],
-            bmi=analysis_result['bmi'],
-            chest_cm=measurements['chest_cm'],
-            neck_cm=measurements['neck_cm'],
-            waist_cm=measurements['waist_cm'],
-            body_length_cm=measurements['body_length_cm'],
-            back_length_cm=measurements['back_length_cm'],
-            leg_length_cm=measurements['leg_length_cm'],
-            size_category=analysis_result['size_category'],
-            size_recommendation=analysis_result['size_recommendation'],
-            size_ranges=analysis_result['size_ranges'],
-            posture=analysis_result['posture'],
-            confidence=analysis_result['confidence'],
-            quality_flag=analysis_result['quality_flag'],
-            bounding_box=bounding_box,
-            image_url=image_url or image_path,
-            thumbnail_url=thumbnail_url,
-            analysis_version=analysis_result['analysis_version'],
-            analysis_method=analysis_result['analysis_method'],
-            detected_at=datetime.utcnow()
-        )
-        
-        db.add(new_cat)
-        db.commit()
-        db.refresh(new_cat)
-        
-        # 📤 Step 4: ส่งผลกลับ
-        response_data = CatResponse.from_orm(new_cat).model_dump()
-        response_data['analysis_summary'] = {
-            "weight_kg": analysis_result['weight_kg'],
-            "size_category": analysis_result['size_category'],
-            "body_condition": analysis_result['body_condition'],
-            "confidence": analysis_result['confidence']
+
+        m = analysis.get("measurements", {})
+
+        # Step 2: บันทึก DB
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO cat (
+                    firebase_uid,
+                    cat_color, breed, age_category,
+                    weight, size_category,
+                    chest_cm, neck_cm, waist_cm,
+                    body_length_cm, back_length_cm, leg_length_cm,
+                    body_condition_score, body_condition, body_condition_description,
+                    bmi, posture,
+                    size_recommendation, size_ranges,
+                    confidence, quality_flag,
+                    bounding_box, image_cat, thumbnail_url,
+                    analysis_version, analysis_method,
+                    detected_at, updated_at
+                ) VALUES (
+                    $1,
+                    $2,  $3,  $4,
+                    $5,  $6,
+                    $7,  $8,  $9,
+                    $10, $11, $12,
+                    $13, $14, $15,
+                    $16, $17,
+                    $18, $19::jsonb,
+                    $20, $21,
+                    $22::jsonb, $23, $24,
+                    $25, $26,
+                    $27, $28
+                ) RETURNING *
+                """,
+                firebase_uid,
+                analysis.get("cat_color", "Unknown"),
+                analysis.get("breed"),
+                analysis.get("age_category", "adult"),
+                _f(analysis.get("weight_kg")),
+                analysis.get("size_category", "M"),
+                _f(m.get("chest_cm")),
+                _f(m.get("neck_cm")),
+                _f(m.get("waist_cm")),
+                _f(m.get("body_length_cm")),
+                _f(m.get("back_length_cm")),
+                _f(m.get("leg_length_cm")),
+                analysis.get("body_condition_score"),
+                analysis.get("body_condition"),
+                analysis.get("body_condition_description"),
+                _f(analysis.get("bmi")),
+                analysis.get("posture"),
+                analysis.get("size_recommendation"),
+                json.dumps(analysis.get("size_ranges")) if analysis.get("size_ranges") else None,
+                _f(analysis.get("confidence", 0.9)),
+                analysis.get("quality_flag", "good"),
+                json.dumps(bounding_box),
+                image_url or image_path,
+                thumbnail_url,
+                analysis.get("analysis_version", "2.0"),
+                analysis.get("analysis_method", "gemini_1.5_flash_vision"),
+                datetime.utcnow(),
+                datetime.utcnow(),
+            )
+
+        result = _row(row)
+        result["analysis_summary"] = {
+            "weight_kg":      analysis.get("weight_kg"),
+            "size_category":  analysis.get("size_category"),
+            "body_condition": analysis.get("body_condition"),
+            "confidence":     analysis.get("confidence"),
         }
-        
+
         return success_response(
-            data=response_data,
-            message=f"✅ แมวของคุณวิเคราะห์เสร็จแล้ว! น้ำหนัก {analysis_result['weight_kg']} kg, ขนาด {analysis_result['size_category']}"
+            data=result,
+            message=f"✅ วิเคราะห์เสร็จ! น้ำหนัก {analysis.get('weight_kg')} kg, ขนาด {analysis.get('size_category')}"
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to analyze and save cat: {str(e)}"
-        )
- 
+        raise HTTPException(status_code=500, detail=f"Failed to analyze and save cat: {e}")
