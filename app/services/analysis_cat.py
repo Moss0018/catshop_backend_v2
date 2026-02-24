@@ -16,7 +16,7 @@ import requests
 import google.generativeai as genai
 
 # ── Configure Gemini ──────────────────────────────────────────────────────────
-genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+genai.configure(api_key=os.environ["GOOGLE_API_KEY_CATSHOP"])
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # ─────────────────────────────────────────────────────────────────────────────
