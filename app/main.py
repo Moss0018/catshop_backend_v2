@@ -7,10 +7,12 @@ from contextlib import asynccontextmanager
 from app.api.callback_flutter import router as callback_router
 from app.api.search_flutter import router as search_router
 from app.api.vision import router as vision_router
+from app.api.cat_crud_api import router as cat_crud_router
 from app.auth.login import router as login_router
 from app.auth.register import router as sign_up_router
 from app.db.database import create_db_pool, close_db_pool
 from app.core.firebase import init_firebase
+
 
 from app.api.api_favourite import router as api_favourite
 from app.api.api_basket import router as api_basket
@@ -67,6 +69,7 @@ app.include_router(sign_up_router, prefix="/api", tags=["SignUp"])
 app.include_router(vision_router, prefix="/api", tags=["Vision"])
 app.include_router(api_favourite, prefix="/api", tags=["Favourites"])
 app.include_router(api_basket, prefix="/api", tags=["Baskets"])
+app.include_router(cat_crud_router, prefix="/api", tags=["Cat CRUD"])
 
 
 @app.get("/health")
