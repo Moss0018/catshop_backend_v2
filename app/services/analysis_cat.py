@@ -88,22 +88,31 @@ def analyze_cat(image_cat: str) -> dict:
     mime_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0]
     print(f"✅ Downloaded ({len(image_bytes)/1024:.1f} KB) | mime={mime_type}")
 
+    # ── 2. เรียก Gemini + Retry ──────────────────────────────
+    print(f"🤖 Calling {MODEL}...")
+    response = None
     max_retries = 3
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
                 model=MODEL,
-                contents=[...],
+                contents=[
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                    types.Part.from_text(text=CAT_ANALYSIS_PROMPT),
+                ],
                 config=types.GenerateContentConfig(
                     temperature=0.1,
                     max_output_tokens=1500,
                 ),
             )
-            break  # สำเร็จแล้วออกจาก loop
-            
+            break  # ✅ สำเร็จออกจาก loop
+
         except Exception as e:
             error_str = str(e)
+            print(f"❌ Gemini API error (attempt {attempt+1}): {e}")
             if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                if "limit: 0" in error_str or "PerDay" in error_str:
+                    raise RuntimeError("วันนี้ใช้ quota หมดแล้ว กรุณาลองใหม่พรุ่งนี้")
                 if attempt < max_retries - 1:
                     wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
                     print(f"⏳ Rate limited, waiting {wait_time}s...")
@@ -112,24 +121,6 @@ def analyze_cat(image_cat: str) -> dict:
                 else:
                     raise RuntimeError("Gemini rate limit exceeded. Please try again later.")
             raise RuntimeError(f"Gemini Vision failed: {e}")
-
-    # ── 2. เรียก Gemini ──────────────────────────────────────
-    print(f"🤖 Calling {MODEL}...")
-    try:
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=[
-                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                types.Part.from_text(text=CAT_ANALYSIS_PROMPT),
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=1500,
-            ),
-        )
-    except Exception as e:
-        print(f"❌ Gemini API error: {e}")
-        raise RuntimeError(f"Gemini Vision failed: {e}")
 
     # ── 3. Parse JSON ────────────────────────────────────────
     raw_text = response.text.strip()
