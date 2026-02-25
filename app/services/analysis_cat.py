@@ -5,6 +5,7 @@ import base64
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+import time
 
 load_dotenv()
 
@@ -86,6 +87,31 @@ def analyze_cat(image_cat: str) -> dict:
     image_bytes = resp.content
     mime_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0]
     print(f"✅ Downloaded ({len(image_bytes)/1024:.1f} KB) | mime={mime_type}")
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=[...],
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=1500,
+                ),
+            )
+            break  # สำเร็จแล้วออกจาก loop
+            
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
+                    print(f"⏳ Rate limited, waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise RuntimeError("Gemini rate limit exceeded. Please try again later.")
+            raise RuntimeError(f"Gemini Vision failed: {e}")
 
     # ── 2. เรียก Gemini ──────────────────────────────────────
     print(f"🤖 Calling {MODEL}...")
