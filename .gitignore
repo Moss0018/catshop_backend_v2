@@ -2,7 +2,7 @@
 *.pt
 *.onnx
 *.weights
-
+.env
 # dataset
 dataset/
 images/
