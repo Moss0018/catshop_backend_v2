@@ -1,7 +1,6 @@
 import os
 import json
 import requests
-import base64
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -11,6 +10,26 @@ load_dotenv()
 
 client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 MODEL = "models/gemini-2.0-flash"
+
+# ── Safety Settings: ปิด filter ทุกหมวด ──────────────────────
+SAFETY_SETTINGS = [
+    types.SafetySetting(
+        category="HARM_CATEGORY_HARASSMENT",
+        threshold="BLOCK_NONE",
+    ),
+    types.SafetySetting(
+        category="HARM_CATEGORY_HATE_SPEECH",
+        threshold="BLOCK_NONE",
+    ),
+    types.SafetySetting(
+        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        threshold="BLOCK_NONE",
+    ),
+    types.SafetySetting(
+        category="HARM_CATEGORY_DANGEROUS_CONTENT",
+        threshold="BLOCK_NONE",
+    ),
+]
 
 CAT_ANALYSIS_PROMPT = """
 สมมุติให้คุณเชี่ยวชาญด้านการดูแลสัตว์เลี้ยงโดยเฉพาะแมว
@@ -76,7 +95,7 @@ def _calc_bmi(weight_kg, body_length_cm):
 
 
 def analyze_cat(image_cat: str) -> dict:
-    # ── 1. Download image ────────────────────────────────────
+    # ── 1. Download image ─────────────────────────────────────
     print(f"⬇️  Downloading image: {image_cat}")
     try:
         resp = requests.get(image_cat, timeout=15)
@@ -88,10 +107,11 @@ def analyze_cat(image_cat: str) -> dict:
     mime_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0]
     print(f"✅ Downloaded ({len(image_bytes)/1024:.1f} KB) | mime={mime_type}")
 
-    # ── 2. เรียก Gemini + Retry ──────────────────────────────
+    # ── 2. เรียก Gemini + Retry ───────────────────────────────
     print(f"🤖 Calling {MODEL}...")
     response = None
     max_retries = 3
+
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
@@ -103,13 +123,15 @@ def analyze_cat(image_cat: str) -> dict:
                 config=types.GenerateContentConfig(
                     temperature=0.1,
                     max_output_tokens=1500,
+                    safety_settings=SAFETY_SETTINGS,  # ← ใส่ตรงนี้
                 ),
             )
-            break  # ✅ สำเร็จออกจาก loop
+            break  # ✅ สำเร็จ
 
         except Exception as e:
             error_str = str(e)
             print(f"❌ Gemini API error (attempt {attempt+1}): {e}")
+
             if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
                 if "limit: 0" in error_str or "PerDay" in error_str:
                     raise RuntimeError("วันนี้ใช้ quota หมดแล้ว กรุณาลองใหม่พรุ่งนี้")
@@ -118,14 +140,15 @@ def analyze_cat(image_cat: str) -> dict:
                     print(f"⏳ Rate limited, waiting {wait_time}s...")
                     time.sleep(wait_time)
                     continue
-                else:
-                    raise RuntimeError("Gemini rate limit exceeded. Please try again later.")
+                raise RuntimeError("Gemini rate limit exceeded. Please try again later.")
+
             raise RuntimeError(f"Gemini Vision failed: {e}")
 
-    # ── 3. Parse JSON ────────────────────────────────────────
+    # ── 3. Parse JSON ─────────────────────────────────────────
     raw_text = response.text.strip()
     print(f"📝 Gemini raw response:\n{raw_text[:300]}...")
 
+    # กัน markdown code block ที่ Gemini บางครั้งยังใส่มา
     if raw_text.startswith("```"):
         raw_text = raw_text.split("```")[1]
         if raw_text.startswith("json"):
@@ -138,25 +161,25 @@ def analyze_cat(image_cat: str) -> dict:
         print(f"❌ JSON parse error: {e}\nRaw: {raw_text}")
         raise RuntimeError(f"Gemini returned invalid JSON: {e}")
 
-    # ── 4. ถ้าไม่ใช่แมว ─────────────────────────────────────
+    # ── 4. ถ้าไม่ใช่แมว ──────────────────────────────────────
     if not ai_data.get("is_cat", True):
         return {
             "is_cat": False,
             "message": ai_data.get("message", "ไม่พบแมวในภาพ"),
         }
 
-    # ── 5. คำนวณ BMI ─────────────────────────────────────────
+    # ── 5. คำนวณ BMI ──────────────────────────────────────────
     bmi = _calc_bmi(ai_data.get("weight_kg"), ai_data.get("body_length_cm"))
 
-    # ── 6. Return dict ───────────────────────────────────────
+    # ── 6. Return dict ────────────────────────────────────────
     result = {
-        "is_cat": True,
-        "message": "ok",
-        "cat_color": ai_data.get("cat_color", "Unknown"),
-        "breed":     ai_data.get("breed"),
-        "age":       ai_data.get("age"),
-        "gender":    ai_data.get("gender", 0),
-        "weight_kg": ai_data.get("weight_kg"),
+        "is_cat":        True,
+        "message":       "ok",
+        "cat_color":     ai_data.get("cat_color", "Unknown"),
+        "breed":         ai_data.get("breed"),
+        "age":           ai_data.get("age"),
+        "gender":        ai_data.get("gender", 0),
+        "weight_kg":     ai_data.get("weight_kg"),
         "size_category": ai_data.get("size_category", "M"),
         "bounding_box":  ai_data.get("bounding_box", []),
         "confidence":    ai_data.get("confidence", 0.90),
