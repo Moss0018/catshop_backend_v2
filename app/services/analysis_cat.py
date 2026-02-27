@@ -53,7 +53,11 @@ CAT_ANALYSIS_PROMPT = """
   "cat_color": "<สีหลัก/ลาย เช่น orange tabby, black, white, calico, bicolor>",
   "breed": "<สายพันธุ์ที่ประเมินได้ เช่น Domestic Shorthair, Persian, Siamese>",
   "age": <อายุโดยประมาณ เป็น integer (ปี) หรือ null>,
-  "gender": <0=ไม่ทราบ, 1=ผู้, 2=เมีย>,
+
+  "gender": <1=Male, 2=Female, 0=Unknown — ดูจากลักษณะทางกายภาพ>,
+
+  "age_category": "<kitten|junior|adult|senior>",
+
   "weight_kg": <น้ำหนักโดยประมาณ เป็น float เช่น 4.5>,
   "chest_cm": <รอบอกโดยประมาณ เป็น float>,
   "neck_cm": <รอบคอโดยประมาณ เป็น float หรือ null>,
@@ -75,14 +79,14 @@ CAT_ANALYSIS_PROMPT = """
   "confidence": <0.0-1.0>
 }
 
-กฎขนาด (อ้างอิงจาก chest_cm):
+กฎ size_category (อ้างอิงจาก chest_cm):
   XS: chest < 28 cm
   S : chest 28-32 cm
   M : chest 32-36 cm
   L : chest 36-40 cm
   XL: chest > 40 cm
 
-กฎ age_category:
+กฎ age_category (อ้างอิงจาก age):
   kitten : age < 1
   junior : age 1-2
   adult  : age 3-10
