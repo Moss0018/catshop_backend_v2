@@ -39,58 +39,75 @@ SAFETY_SETTINGS = [
 ]
 
 CAT_ANALYSIS_PROMPT = """
-สมมุติให้คุณเชี่ยวชาญด้านการดูแลสัตว์เลี้ยงโดยเฉพาะแมว
+You are a professional cat analysis AI specialized in pet body measurement and health assessment.
 
-ช่วยวิเคราะห์แมวในภาพนี้ แล้วตอบกลับเป็น JSON เท่านั้น
-ห้ามมีข้อความอื่น ห้ามมี markdown ห้ามมี code block — raw JSON เท่านั้น
+STRICT OUTPUT REQUIREMENTS:
+- Return raw JSON only.
+- No markdown.
+- No explanation.
+- No extra text.
+- Ensure valid JSON format.
+- If invalid, internally correct before returning.
 
-ถ้าไม่มีแมวในภาพ ให้ตอบ:
-{"is_cat": false, "message": "ไม่พบแมวในภาพ"}
-
-ถ้ามีแมว ให้วิเคราะห์และตอบ JSON ครบทุก field ดังนี้:
+If no cat is detected, return:
 {
-  "is_cat": true,
-  "cat_color": "<สีหลัก/ลาย เช่น orange tabby, black, white, calico, bicolor>",
-  "breed": "<สายพันธุ์ที่ประเมินได้ เช่น Domestic Shorthair, Persian, Siamese>",
-  "age": <อายุโดยประมาณ เป็น integer (ปี) หรือ null>,
-
-  "gender": <1=Male, 2=Female, 0=Unknown — ดูจากลักษณะทางกายภาพ>,
-
-  "age_category": "<kitten|junior|adult|senior>",
-
-  "weight_kg": <น้ำหนักโดยประมาณ เป็น float เช่น 4.5>,
-  "chest_cm": <รอบอกโดยประมาณ เป็น float>,
-  "neck_cm": <รอบคอโดยประมาณ เป็น float หรือ null>,
-  "waist_cm": <รอบเอวโดยประมาณ เป็น float หรือ null>,
-  "body_length_cm": <ความยาวลำตัว เป็น float หรือ null>,
-  "back_length_cm": <ความยาวหลัง เป็น float หรือ null>,
-  "leg_length_cm": <ความยาวขาหน้า เป็น float หรือ null>,
-  "body_condition_score": <integer 1-9>,
-  "body_condition": "<underweight|ideal|overweight>",
-  "body_condition_description": "<ประเมินสภาพร่างกาย 1-2 ประโยค>",
-  "posture": "<standing|sitting|lying|other>",
-  "size_recommendation": "<ขนาดเสื้อที่แนะนำพร้อมเหตุผล>",
-  "size_ranges": {
-    "chest_min": <float>, "chest_max": <float>,
-    "neck_min": <float>, "neck_max": <float>,
-    "back_length_min": <float>, "back_length_max": <float>
-  },
-  "quality_flag": "<good|blurry|partial|unclear>",
-  "confidence": <0.0-1.0>
+  "is_cat": false,
+  "message": "ไม่ใช่แมวหรือไม่พบแมวในภาพ"
 }
 
-กฎ size_category (อ้างอิงจาก chest_cm):
-  XS: chest < 28 cm
-  S : chest 28-32 cm
-  M : chest 32-36 cm
-  L : chest 36-40 cm
-  XL: chest > 40 cm
+If a cat is detected, return this exact schema:
 
-กฎ age_category (อ้างอิงจาก age):
-  kitten : age < 1
-  junior : age 1-2
-  adult  : age 3-10
-  senior : age > 10
+{
+  "is_cat": true,
+  "cat_color": string,
+  "breed": string,
+  "age": integer or null,
+  "gender": 0,
+  "age_category": "kitten" | "junior" | "adult" | "senior",
+  "weight_kg": float,
+  "chest_cm": float,
+  "neck_cm": float or null,
+  "waist_cm": float or null,
+  "body_length_cm": float or null,
+  "back_length_cm": float or null,
+  "leg_length_cm": float or null,
+  "body_condition_score": integer (1-9),
+  "body_condition": "underweight" | "ideal" | "overweight",
+  "body_condition_description": string,
+  "posture": "standing" | "sitting" | "lying" | "other",
+  "size_recommendation": "XS" | "S" | "M" | "L" | "XL",
+  "size_ranges": {
+    "chest_min": float,
+    "chest_max": float,
+    "neck_min": float,
+    "neck_max": float,
+    "back_length_min": float,
+    "back_length_max": float
+  },
+  "quality_flag": "good" | "blurry" | "partial" | "unclear",
+  "confidence": float
+}
+
+DERIVATION RULES:
+
+Age category (derive strictly from age):
+- kitten: age >= 0 AND age < 1
+- junior: age >= 1 AND age < 3
+- adult : age >= 3 AND age <= 10
+- senior: age > 10
+- If age is null → age_category = "adult"
+
+Size recommendation (derive strictly from chest_cm):
+- XS: chest < 28
+- S : 28 <= chest < 32
+- M : 32 <= chest < 36
+- L : 36 <= chest < 40
+- XL: chest >= 40
+
+- size_ranges must correspond to the selected size category.
+- If a measurement cannot be estimated from image, use null.
+- Estimates must reflect realistic domestic cat proportions.
+- confidence should reflect image clarity and visibility of full body (0.0–1.0).
 """
 
 
@@ -280,7 +297,7 @@ def analyze_cat(image_cat: str) -> dict:
     if not ai_data.get("is_cat", True):
         return {
             "is_cat": False,
-            "message": ai_data.get("message", "ไม่พบแมวในภาพ"),
+            "message": ai_data.get("message", "ไม่ใช่แมวหรือไม่พบแมวในภาพ"),
         }
 
     # ── 6. Pydantic validation ────────────────────────────────

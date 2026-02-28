@@ -1,5 +1,4 @@
-# main.py
-
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -12,46 +11,44 @@ from app.auth.login import router as login_router
 from app.auth.register import router as sign_up_router
 from app.db.database import create_db_pool, close_db_pool
 from app.core.firebase import init_firebase
-
-
 from app.api.api_favourite import router as api_favourite
 from app.api.api_basket import router as api_basket
+
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    # --- DB ---
+    # --- Startup ---
     try:
         await create_db_pool()
     except Exception as e:
-        print(f"⚠️ Database not ready, continue without DB: {e}")
+        logger.warning("⚠️ Database not ready, continue without DB: %s", e)
 
-    # --- Firebase ---
     try:
         init_firebase()
-        print("✅ Firebase initialized")
+        logger.info("✅ Firebase initialized")
     except Exception as e:
-        print(f"⚠️ Firebase skipped: {e}")
+        logger.warning("⚠️ Firebase skipped: %s", e)
 
-   
-
-    print("🚀 App startup complete")
+    logger.info("🚀 App startup complete")
     yield
 
     # --- Shutdown ---
     try:
         await close_db_pool()
-        print("🧹 Database pool closed")
-    except Exception:
-        pass
+        logger.info("🧹 Database pool closed")
+    except Exception as e:                          # nosec B110
+        logger.warning("⚠️ Failed to close database pool: %s", e)
 
-    print("🧹 App shutdown complete")
+    logger.info("🧹 App shutdown complete")
 
 
 app = FastAPI(
     title="ABC SHOP API",
     version="1.5.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -63,12 +60,12 @@ app.add_middleware(
 )
 
 app.include_router(callback_router, prefix="/api", tags=["Callback"])
-app.include_router(search_router, prefix="/api", tags=["Search"])
-app.include_router(login_router, prefix="/api", tags=["LogIn"])
-app.include_router(sign_up_router, prefix="/api", tags=["SignUp"])
-app.include_router(vision_router, prefix="/api", tags=["Vision"])
-app.include_router(api_favourite, prefix="/api", tags=["Favourites"])
-app.include_router(api_basket, prefix="/api", tags=["Baskets"])
+app.include_router(search_router,   prefix="/api", tags=["Search"])
+app.include_router(login_router,    prefix="/api", tags=["LogIn"])
+app.include_router(sign_up_router,  prefix="/api", tags=["SignUp"])
+app.include_router(vision_router,   prefix="/api", tags=["Vision"])
+app.include_router(api_favourite,   prefix="/api", tags=["Favourites"])
+app.include_router(api_basket,      prefix="/api", tags=["Baskets"])
 app.include_router(cat_crud_router, prefix="/api", tags=["Cat CRUD"])
 
 

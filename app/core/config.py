@@ -6,7 +6,9 @@ from typing import List, Optional
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "ABCat Shop API"
-    APP_HOST: str = "0.0.0.0"
+    # default เป็น 127.0.0.1 (localhost only) — ปลอดภัยกว่า 0.0.0.0
+    # ถ้า deploy ใน Docker/production ให้ set APP_HOST=0.0.0.0 ใน .env แทน
+    APP_HOST: str = "127.0.0.1"  # nosec B104
     APP_PORT: int = 8000
     DEBUG: bool = False
 

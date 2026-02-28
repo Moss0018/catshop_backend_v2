@@ -36,7 +36,7 @@ def _f(value) -> float | None:
 # ============================================
 @router.post("/system/cats", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_cat(
-    cat: dict,                                        # รับ JSON body ตรงๆ
+    cat: dict,
     user: dict = Depends(verify_firebase_token)
 ):
     firebase_uid = user.get("firebase_uid")
@@ -130,18 +130,20 @@ async def search_cats(
     user: dict = Depends(verify_firebase_token)
 ):
     firebase_uid = user.get("firebase_uid")
+    if not firebase_uid:
+        raise HTTPException(status_code=401, detail="Invalid Firebase token")
 
-    # สร้าง WHERE clause แบบ dynamic
+    # column names เขียนตรงใน code — ไม่รับจาก user input
     conditions = ["firebase_uid = $1"]
     params: list = [firebase_uid]
     idx = 2
 
-    if breed:
+    if breed is not None:
         conditions.append(f"breed ILIKE ${idx}")
         params.append(f"%{breed}%")
         idx += 1
 
-    if size_category:
+    if size_category is not None:
         conditions.append(f"size_category = ${idx}")
         params.append(size_category)
         idx += 1
@@ -156,37 +158,36 @@ async def search_cats(
         params.append(max_weight)
         idx += 1
 
-    where = " AND ".join(conditions)
+    # where clause ประกอบจาก literals ใน code เท่านั้น — ไม่มี user input ปน
+    where_clause = " AND ".join(conditions)  # nosec B608
+
+    count_sql = f"SELECT COUNT(*) FROM cat WHERE {where_clause}"  # nosec B608
+    select_sql = (                                                  # nosec B608
+        f"SELECT * FROM cat WHERE {where_clause} "
+        f"ORDER BY detected_at DESC "
+        f"OFFSET ${idx} LIMIT ${idx + 1}"
+    )
 
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            total = await conn.fetchval(
-                f"SELECT COUNT(*) FROM cat WHERE {where}", *params
-            )
-            cats = await conn.fetch(
-                f"""
-                SELECT * FROM cat WHERE {where}
-                ORDER BY detected_at DESC
-                OFFSET ${idx} LIMIT ${idx+1}
-                """,
-                *params, skip, limit
-            )
+            total = await conn.fetchval(count_sql, *params)
+            cats  = await conn.fetch(select_sql, *params, skip, limit)
 
         return success_response(
             data={
-                "cats": _rows(cats),
-                "total": total,
-                "skip": skip,
-                "limit": limit,
+                "cats":   _rows(cats),
+                "total":  total,
+                "skip":   skip,
+                "limit":  limit,
                 "filters": {
-                    "breed": breed,
+                    "breed":         breed,
                     "size_category": size_category,
-                    "min_weight": min_weight,
-                    "max_weight": max_weight,
-                }
+                    "min_weight":    min_weight,
+                    "max_weight":    max_weight,
+                },
             },
-            message=f"Found {len(cats)} cats matching criteria"
+            message=f"Found {len(cats)} cats matching criteria",
         )
 
     except Exception as e:
@@ -281,49 +282,53 @@ async def update_cat(
 ):
     firebase_uid = user.get("firebase_uid")
 
+    ALLOWED_COLUMNS: frozenset = frozenset({
+        "cat_color", "breed", "age", "gender", "weight",
+        "size_category", "chest_cm", "neck_cm", "waist_cm",
+        "body_length_cm", "back_length_cm", "leg_length_cm",
+        "confidence", "age_category", "body_condition_score",
+        "body_condition", "body_condition_description", "bmi",
+        "posture", "size_recommendation", "quality_flag",
+        "analysis_version", "analysis_method", "image_cat", "thumbnail_url",
+    })
+
+    # กรอง key และ validate ว่าอยู่ใน whitelist จริงๆ
+    updates: dict = {
+        col: val
+        for col, val in payload.items()
+        if col in ALLOWED_COLUMNS
+    }
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    # column names มาจาก ALLOWED_COLUMNS (literals) เท่านั้น — ปลอดภัย
+    set_parts = [
+        f"{col} = ${i + 2}"          # nosec B608
+        for i, col in enumerate(updates.keys())
+    ]
+    set_clause = ", ".join(set_parts)
+    values     = list(updates.values())
+
+    update_sql = (
+        f"UPDATE cat SET {set_clause}, updated_at = NOW() "  # nosec B608
+        f"WHERE id = $1 RETURNING *"
+    )
+
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            # ตรวจสอบว่าเป็นเจ้าของก่อน
             exists = await conn.fetchval(
                 "SELECT id FROM cat WHERE id = $1 AND firebase_uid = $2",
-                cat_id, firebase_uid
+                cat_id, firebase_uid,
             )
             if not exists:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Cat {cat_id} not found or not owned by you"
+                    detail=f"Cat {cat_id} not found or not owned by you",
                 )
 
-            # สร้าง SET clause แบบ dynamic จาก fields ที่ส่งมา
-            allowed = {
-                "cat_color", "breed", "age", "gender", "weight",
-                "size_category", "chest_cm", "neck_cm", "waist_cm",
-                "body_length_cm", "back_length_cm", "leg_length_cm",
-                "confidence", "age_category", "body_condition_score",
-                "body_condition", "body_condition_description", "bmi",
-                "posture", "size_recommendation", "quality_flag",
-                "analysis_version", "analysis_method", "image_cat", "thumbnail_url"
-            }
-            updates = {k: v for k, v in payload.items() if k in allowed}
-
-            if not updates:
-                raise HTTPException(status_code=400, detail="No valid fields to update")
-
-            set_clause = ", ".join(
-                f"{col} = ${i+2}" for i, col in enumerate(updates.keys())
-            )
-            values = list(updates.values())
-
-            row = await conn.fetchrow(
-                f"""
-                UPDATE cat
-                SET {set_clause}, updated_at = NOW()
-                WHERE id = $1
-                RETURNING *
-                """,
-                cat_id, *values
-            )
+            row = await conn.fetchrow(update_sql, cat_id, *values)
 
         return success_response(data=_row(row), message="Cat updated successfully")
 
@@ -381,9 +386,9 @@ async def get_all_cats_admin(
     limit: int = 100,
     user: dict = Depends(verify_firebase_token)
 ):
-    # TODO: เปิดตรวจสอบ admin role เมื่อพร้อม
-    # if not user.get("is_admin"):
-    #     raise HTTPException(status_code=403, detail="Admin access required")
+    # FIX: enforce admin role check — ป้องกัน user ทั่วไปเข้าถึง
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
 
     try:
         pool = await get_db_pool()
@@ -404,6 +409,8 @@ async def get_all_cats_admin(
             message=f"Retrieved {len(cats)} cats (admin view)"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve cats: {e}")
 
