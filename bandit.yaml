@@ -1,4 +1,0 @@
-# .bandit  (วางไว้ที่ root project เดียวกับ pyproject.toml)
-skips:
-  - B608   # Dynamic SQL — all WHERE/SET clauses built from whitelisted literals only,
-           # no user input reaches column names. Values always use $N parameterized queries.
