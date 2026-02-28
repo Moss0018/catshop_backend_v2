@@ -52,7 +52,7 @@ STRICT OUTPUT REQUIREMENTS:
 If no cat is detected, return:
 {
   "is_cat": false,
-  "message": "ไม่ใช่แมวหรือไม่พบแมวในภาพ"
+  "message": "ไม่พบแมวในภาพ"
 }
 
 If a cat is detected, return this exact schema:
@@ -61,7 +61,7 @@ If a cat is detected, return this exact schema:
   "is_cat": true,
   "cat_color": string,
   "breed": string,
-  "age": integer or null,
+  "age": integer (MUST be a number, never null — use 0 if unknown),
   "gender": 0,
   "age_category": "kitten" | "junior" | "adult" | "senior",
   "weight_kg": float,
@@ -95,7 +95,7 @@ Age category (derive strictly from age):
 - junior: age >= 1 AND age < 3
 - adult : age >= 3 AND age <= 10
 - senior: age > 10
-- If age is null → age_category = "adult"
+- If age is unknown → set age = 0 and age_category = "kitten"
 
 Size recommendation (derive strictly from chest_cm):
 - XS: chest < 28
@@ -125,7 +125,7 @@ class CatAnalysisSchema(BaseModel):
     is_cat: bool
     cat_color: str
     breed: Optional[str] = None
-    age: Optional[int] = None
+    age: int = 0  # ✅ NOT NULL — default 0 ถ้า model ไม่ส่ง
     gender: int = 0
     weight_kg: float
     chest_cm: float
@@ -143,7 +143,7 @@ class CatAnalysisSchema(BaseModel):
     quality_flag: str = "good"
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
-    # ✅ FIX 2: auto-cast string → float (Gemini ชอบส่ง "4.5" แทน 4.5)
+    # ✅ auto-cast string → float
     @field_validator("weight_kg", "chest_cm", mode="before")
     @classmethod
     def cast_to_float(cls, v):
@@ -152,7 +152,7 @@ class CatAnalysisSchema(BaseModel):
         except (TypeError, ValueError):
             raise ValueError(f"Cannot convert '{v}' to float")
 
-    # ✅ FIX: clamp body_condition_score ให้อยู่ใน 1–9 เสมอ
+    # ✅ clamp body_condition_score ให้อยู่ใน 1–9 เสมอ
     @field_validator("body_condition_score", mode="before")
     @classmethod
     def clamp_bcs(cls, v):
@@ -161,6 +161,17 @@ class CatAnalysisSchema(BaseModel):
         except (TypeError, ValueError):
             return 5  # fallback กลาง ๆ
         return max(1, min(9, v))
+
+    # ✅ แปลง null/None → 0 สำหรับ age
+    @field_validator("age", mode="before")
+    @classmethod
+    def coerce_age(cls, v):
+        if v is None:
+            return 0
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
 
 
 # ── Pure helper functions ─────────────────────────────────────
@@ -181,9 +192,7 @@ def _calc_bmi(weight_kg: Optional[float], body_length_cm: Optional[float]) -> Op
 
 
 def _calc_size(chest: Optional[float]) -> str:
-    """
-    ✅ FIX 3: deterministic — backend ตัดสิน business rule ไม่ใช่ AI
-    """
+    """Deterministic — backend ตัดสิน business rule ไม่ใช่ AI"""
     if chest is None:
         return "M"
     if chest < 28:   return "XS"
@@ -193,17 +202,16 @@ def _calc_size(chest: Optional[float]) -> str:
     return "XL"
 
 
-def _calc_age_category(age: Optional[int]) -> str:
-    """✅ FIX: deterministic age_category จาก age — ไม่เชื่อ model"""
-    if age is None:  return "adult"
+def _calc_age_category(age: int) -> str:
+    """Deterministic age_category จาก age — ไม่เชื่อ model"""
     if age < 1:      return "kitten"
     elif age <= 2:   return "junior"
     elif age <= 10:  return "adult"
     return "senior"
 
 
-def _log_parse_error(raw_text: str, error: Exception) -> None:
-    """✅ FIX: dump raw response ลง file เพื่อ debug"""
+def _log_parse_error(raw_text: str, error) -> None:
+    """Dump raw response ลง file เพื่อ debug"""
     log_path = f"parse_error_{int(time.time())}.log"
     try:
         with open(log_path, "w", encoding="utf-8") as f:
@@ -245,6 +253,7 @@ def analyze_cat(image_cat: str) -> dict:
                     temperature=0.1,
                     max_output_tokens=1500,
                     safety_settings=SAFETY_SETTINGS,
+                    response_mime_type="application/json",  # ✅ บังคับ pure JSON
                 ),
             )
             break
@@ -265,7 +274,7 @@ def analyze_cat(image_cat: str) -> dict:
 
             raise RuntimeError(f"Gemini Vision failed: {e}")
 
-    # ✅ FIX 5: guard ถ้า response ยัง None หลัง retry ทั้งหมด
+    # ✅ guard ถ้า response ยัง None หลัง retry ทั้งหมด
     if response is None:
         raise RuntimeError("Gemini did not return a response after all retries")
 
@@ -279,25 +288,37 @@ def analyze_cat(image_cat: str) -> dict:
         except Exception:
             raise RuntimeError("Gemini returned empty response")
 
+    # ✅ guard empty text
+    if not raw_text:
+        raise RuntimeError("Gemini returned empty text")
+
     print(f"📝 Gemini raw response:\n{raw_text[:300]}...")
 
-    # strip markdown code block แบบ robust
+    # strip markdown code block แบบ robust (กัน 2 ชั้น ต่อให้ mime type ไม่ work)
     raw_text = re.sub(r"^```[a-zA-Z]*\s*", "", raw_text)
     raw_text = re.sub(r"\s*```$", "", raw_text)
     raw_text = raw_text.strip()
 
-    # ── 4. JSON parse ─────────────────────────────────────────
+    # ── 4. JSON parse (with fallback extract) ────────────────
     try:
         ai_data: dict = json.loads(raw_text)
-    except json.JSONDecodeError as e:
-        _log_parse_error(raw_text, e)
-        raise RuntimeError(f"Gemini returned invalid JSON: {e}")
+    except json.JSONDecodeError:
+        # fallback: หา JSON block ใน response
+        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        if not match:
+            _log_parse_error(raw_text, "No JSON block found")
+            raise RuntimeError("Gemini returned invalid JSON (no JSON block found)")
+        try:
+            ai_data = json.loads(match.group(0))
+        except Exception as e:
+            _log_parse_error(raw_text, e)
+            raise RuntimeError(f"Gemini returned invalid JSON: {e}")
 
     # ── 5. ถ้าไม่ใช่แมว ──────────────────────────────────────
     if not ai_data.get("is_cat", True):
         return {
             "is_cat": False,
-            "message": ai_data.get("message", "ไม่ใช่แมวหรือไม่พบแมวในภาพ"),
+            "message": ai_data.get("message", "ไม่พบแมวในภาพ"),
         }
 
     # ── 6. Pydantic validation ────────────────────────────────
@@ -312,12 +333,15 @@ def analyze_cat(image_cat: str) -> dict:
     weight_kg = _to_float(validated.weight_kg)
     body_len  = _to_float(validated.body_length_cm)
 
-    size_category = _calc_size(chest_cm)          # ✅ deterministic, ไม่เชื่อ model
-    age_category  = _calc_age_category(validated.age)  # ✅ deterministic
+    # age รับประกัน int ไม่มี null แล้ว (Pydantic coerce_age จัดการ)
+    age: int = validated.age
+
+    size_category = _calc_size(chest_cm)       # ✅ deterministic
+    age_category  = _calc_age_category(age)    # ✅ deterministic
 
     bmi = _calc_bmi(weight_kg, body_len)
 
-    # ✅ FIX 4: confidence default 0.5 ถ้า model ไม่ส่ง (ไม่โกง 0.9)
+    # confidence default 0.5 ถ้า model ไม่ส่ง
     confidence = validated.confidence if validated.confidence is not None else 0.5
 
     # ── 8. Return ─────────────────────────────────────────────
@@ -326,7 +350,7 @@ def analyze_cat(image_cat: str) -> dict:
         "message":       "ok",
         "cat_color":     validated.cat_color,
         "breed":         validated.breed,
-        "age":           validated.age,
+        "age":           age,           # ✅ int เสมอ ไม่มี null
         "gender":        validated.gender,
         "weight_kg":     weight_kg,
         "size_category": size_category,
@@ -354,6 +378,6 @@ def analyze_cat(image_cat: str) -> dict:
 
     print(
         f"✅ Done: {result['cat_color']} | size={size_category} "
-        f"| chest={chest_cm}cm | bmi={bmi} | confidence={confidence}"
+        f"| chest={chest_cm}cm | bmi={bmi} | confidence={confidence} | age={age}"
     )
     return result
